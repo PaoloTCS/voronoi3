@@ -1,6 +1,6 @@
-# Voronoi3: Semantic Voronoi Tessellation Explorer
+# Voronoi4: Enhanced Semantic Voronoi Tessellation Explorer
 
-Voronoi3 is an enhanced version of the Semantic Voronoi Tessellation Explorer, building on the foundation of Voronoi2. This application creates interactive visualizations of knowledge domains based on semantic relationships.
+Voronoi4 is an enhanced version of the Semantic Voronoi Tessellation Explorer, building on the foundation of Voronoi3. This application creates interactive visualizations of knowledge domains based on semantic relationships.
 
 ## Features
 
@@ -9,6 +9,10 @@ Voronoi3 is an enhanced version of the Semantic Voronoi Tessellation Explorer, b
 - Question answering based on uploaded documents
 - Nested hierarchies of domains and subdomains
 - Semantic relationship visualization between domains
+- Enhanced document processing and analysis
+- Improved vector embedding and retrieval
+- Better CORS configuration
+- Streamlined user interface
 
 ## Getting Started
 
@@ -22,8 +26,8 @@ Voronoi3 is an enhanced version of the Semantic Voronoi Tessellation Explorer, b
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/voronoi3.git
-   cd voronoi3
+   git clone https://github.com/yourusername/voronoi4.git
+   cd voronoi4
    ```
 
 2. Install dependencies:
@@ -37,10 +41,9 @@ Voronoi3 is an enhanced version of the Semantic Voronoi Tessellation Explorer, b
    - Add your API keys and configuration
 
 4. Start the application:
-   ```
-   npm start
-   ```
-
+   1. - ~/VerbumTechnologies/Voronoi3/backend% npm run dev 
+   2. -~/VerbumTechnologies/Voronoi3/frontend% npm start  
+   
 ## Usage
 
 1. Begin by entering at least 3 domains/interests on the splash page
@@ -56,13 +59,15 @@ Voronoi3 is an enhanced version of the Semantic Voronoi Tessellation Explorer, b
 - Vector Database: Pinecone
 - Embeddings & AI: OpenAI
 
-## Improvements in Voronoi3
+## Improvements in Voronoi4
 
-- Enhanced document processing
-- More robust error handling
-- Improved vector embedding and retrieval
-- Better CORS configuration
-- Streamlined user interface
+- Enhanced document processing with better error handling
+- More robust vector embedding and retrieval system
+- Improved CORS configuration for better security
+- Streamlined user interface with better UX
+- Better performance optimization
+- Enhanced error handling and logging
+- Improved documentation
 
 ## License
 

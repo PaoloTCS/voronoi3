@@ -1,7 +1,7 @@
 {
-    "name": "voronoi-tessellation-app",
+    "name": "voronoi4",
     "version": "1.0.0",
-    "description": "Semantic Voronoi Tessellation Explorer",
+    "description": "Enhanced Semantic Voronoi Tessellation Explorer - Version 4",
     "scripts": {
         "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
         "start:frontend": "cd frontend && npm start",

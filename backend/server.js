@@ -5,17 +5,25 @@ const path = require('path');
 const multer = require('multer');
 const dotenv = require('dotenv');
 const { Pinecone } = require('@pinecone-database/pinecone');
-const { OpenAIEmbeddings, ChatOpenAI } = require('@langchain/openai');
+// Keep OpenAI Embeddings for now for Pinecone compatibility
+const { OpenAIEmbeddings } = require('@langchain/openai'); 
+// Import Google Chat Model
+const { ChatGoogleGenerativeAI } = require('@langchain/google-genai'); 
 const { RecursiveCharacterTextSplitter } = require('langchain/text_splitter');
 const { HumanMessage, SystemMessage } = require('@langchain/core/messages');
 
 // Load environment variables
 dotenv.config();
 
+// --- BEGIN DIAGNOSTIC LOG ---
+// console.log("DIAGNOSTIC: Loaded OPENAI_API_KEY=", process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 10) + '...' + process.env.OPENAI_API_KEY.substring(process.env.OPENAI_API_KEY.length - 4) : 'UNDEFINED');
+// --- END DIAGNOSTIC LOG ---
+
 // Import routes
 const embeddingsRoutes = require('./routes/embeddings');
 const documentsRoutes = require('./routes/documents');
-const qaRoutes = require('./routes/qa');
+const externalRoutes = require('./routes/external');
+// const qaRoutes = require('./routes/qa');
 
 const app = express();
 const PORT = process.env.PORT || 5001; // Changed from 5000 to 5001
@@ -39,40 +47,26 @@ const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY
 });
 
-// Initialize OpenAI components
-let embeddings = new OpenAIEmbeddings({
-  openAIApiKey: process.env.OPENAI_API_KEY,
+// Initialize OpenAI Embeddings (needed for Pinecone)
+const embeddings = new OpenAIEmbeddings({
+  openAIApiKey: process.env.OPENAI_API_KEY, // Keep OPENAI_API_KEY for embeddings
   modelName: "text-embedding-3-small",
   stripNewLines: true
 });
 
-let model = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  modelName: "gpt-3.5-turbo",
-  temperature: 0
+// Initialize Google Chat Model
+const model = new ChatGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_API_KEY, // Use GOOGLE_API_KEY
+  model: "gemini-1.5-flash-latest", // Changed to gemini-1.5-flash-latest
+  temperature: 0.3, // Adjust temperature as needed
+  // safetySettings: [], // Optional: configure safety settings if needed
 });
 
-// Middleware to extract OpenAI API key from Authorization header
+// Middleware to attach model to request (and embeddings if needed elsewhere)
 app.use((req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const apiKey = authHeader.split(' ')[1];
-    // Override the environment variable for this request
-    process.env.OPENAI_API_KEY = apiKey;
-    
-    // Reinitialize OpenAI components with the new API key
-    embeddings = new OpenAIEmbeddings({
-      openAIApiKey: apiKey,
-      modelName: "text-embedding-3-small",
-      stripNewLines: true
-    });
-
-    model = new ChatOpenAI({
-      openAIApiKey: apiKey,
-      modelName: "gpt-3.5-turbo",
-      temperature: 0
-    });
-  }
+  // No longer need to dynamically reinitialize based on Authorization header for the chat model
+  req.model = model;
+  req.embeddings = embeddings; // Attach embeddings too, in case needed by other routes
   next();
 });
 
@@ -85,24 +79,30 @@ const textSplitter = new RecursiveCharacterTextSplitter({
 app.get('/api/test-connections', async (req, res) => {
   try {
     const results = {
-      openai: { success: false, error: null },
-      pinecone: { success: false, error: null }
+      google_chat: { success: false, error: null }, // Renamed from openai
+      pinecone: { success: false, error: null },
+      openai_embeddings: { success: false, error: null } // Added separate test for embeddings
     };
 
-    // Test OpenAI
+    // Test Google Chat Model
     try {
-      // Test both embeddings and chat model
-      await Promise.all([
-        embeddings.embedQuery("test"),
-        model.call([
-          new SystemMessage("You are a helpful assistant."),
-          new HumanMessage("Say 'test successful'")
-        ])
+      await req.model.invoke([ // Use req.model
+        new SystemMessage("You are a helpful assistant."),
+        new HumanMessage("Say 'Google test successful'")
       ]);
-      results.openai.success = true;
+      results.google_chat.success = true;
     } catch (error) {
-      results.openai.error = error.message;
-      console.error('OpenAI test failed:', error);
+      results.google_chat.error = error.message;
+      console.error('Google Chat test failed:', error);
+    }
+
+    // Test OpenAI Embeddings
+    try {
+      await req.embeddings.embedQuery("test"); // Use req.embeddings
+      results.openai_embeddings.success = true;
+    } catch (error) {
+      results.openai_embeddings.error = error.message;
+      console.error('OpenAI Embeddings test failed:', error);
     }
 
     // Test Pinecone
@@ -115,8 +115,8 @@ app.get('/api/test-connections', async (req, res) => {
       console.error('Pinecone test failed:', error);
     }
 
-    // Overall success if both services are working
-    const success = results.openai.success && results.pinecone.success;
+    // Overall success depends on all services
+    const success = results.google_chat.success && results.pinecone.success && results.openai_embeddings.success;
     
     res.json({ 
       success,
@@ -133,10 +133,11 @@ app.get('/api/test-connections', async (req, res) => {
   }
 });
 
-// Process document endpoint
+// Process document endpoint (uses embeddings)
 app.post('/api/process-document', async (req, res) => {
   try {
     const { rawDocument, documentId } = req.body;
+    const currentEmbeddings = req.embeddings; // Use embeddings from request
     
     if (!rawDocument || !documentId) {
       return res.status(400).json({
@@ -156,10 +157,10 @@ app.post('/api/process-document', async (req, res) => {
     const vectors = await Promise.all(
       chunks.map(async (chunk, i) => {
         try {
-          const embedding = await embeddings.embedQuery(chunk.pageContent);
+          const embedding = await currentEmbeddings.embedQuery(chunk.pageContent);
           // Truncate the embedding to match Pinecone index dimensions (1024)
           const truncatedEmbedding = embedding.slice(0, 1024);
-          console.log(`Original embedding length: ${embedding.length}, truncated to: ${truncatedEmbedding.length}`);
+          // console.log(`Original embedding length: ${embedding.length}, truncated to: ${truncatedEmbedding.length}`);
           
           return {
             id: `${documentId}-${i}`,
@@ -209,39 +210,37 @@ app.post('/api/process-document', async (req, res) => {
   }
 });
 
-// Query document endpoint
+// Query document endpoint (uses model and embeddings)
 app.post('/api/query-document', async (req, res) => {
   try {
     const { question, documentId } = req.body;
-    
+    const currentModel = req.model; // Use model from request
+    const currentEmbeddings = req.embeddings; // Use embeddings from request
+
     console.log(`Querying document ${documentId} with question: ${question}`);
     
     // Generate embedding for the question
-    const queryEmbedding = await embeddings.embedQuery(question);
-    // Truncate the query embedding to match Pinecone index dimensions (1024)
+    const queryEmbedding = await currentEmbeddings.embedQuery(question);
     const truncatedQueryEmbedding = queryEmbedding.slice(0, 1024);
-    console.log(`Query embedding truncated from ${queryEmbedding.length} to ${truncatedQueryEmbedding.length} dimensions`);
+    // console.log(`Query embedding truncated from ${queryEmbedding.length} to ${truncatedQueryEmbedding.length} dimensions`);
     
     // Query Pinecone
     const index = pinecone.index(process.env.PINECONE_INDEX);
-    
-    // Query without namespace to debug
     console.log('Querying Pinecone...');
     const queryResponse = await index.query({
       vector: truncatedQueryEmbedding,
       topK: 3,
-      includeMetadata: true
+      includeMetadata: true,
+      filter: { documentId: documentId }
     });
-    
     console.log(`Query returned ${queryResponse.matches.length} matches`);
 
-    // Get the relevant chunks
     const relevantChunks = queryResponse.matches.length > 0 
       ? queryResponse.matches.map(match => match.metadata.text).join("\n\n")
       : "No relevant context found for this question.";
     
-    // Generate answer using OpenAI
-    const answer = await model.call([
+    // Generate answer using the current model (now Google)
+    const answer = await currentModel.invoke([ // Use currentModel
       new SystemMessage("You are a helpful assistant that answers questions based on the provided context."),
       new HumanMessage(`Based on the following context, answer this question: "${question}"\n\nContext:\n${relevantChunks}`)
     ]);
@@ -293,10 +292,11 @@ app.delete('/api/delete-document/:documentId', async (req, res) => {
   }
 });
 
-// API routes
+// Mount API routes
 app.use('/api/embeddings', embeddingsRoutes);
 app.use('/api/documents', documentsRoutes);
-app.use('/api/ask', qaRoutes);
+app.use('/api/external', externalRoutes);
+// app.use('/api/qa', qaRoutes);
 
 // Serve static assets if in production
 if (process.env.NODE_ENV === 'production') {

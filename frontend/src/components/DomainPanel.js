@@ -1,10 +1,11 @@
 // frontend/src/components/DomainPanel.js - Updated with document viewing
-import React, { useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import DocumentUpload from './DocumentUpload';
 import QuestionAnswering from './QuestionAnswering';
 import { useDomains } from '../context/DomainContext';
 import { formatPathForDisplay } from '../utils/pathUtils';
 import DocumentProcessorComponent from './DocumentProcessorComponent';
+import axios from 'axios';
 
 const DomainPanel = ({ 
   currentDomain, 
@@ -21,7 +22,14 @@ const DomainPanel = ({
   const [newRootDomain, setNewRootDomain] = useState('');
   const [showAllDocuments, setShowAllDocuments] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState(null);
-  const { documents: allDocumentsMap, domains, clearDocuments } = useDomains();
+  const { documents: allDocumentsMap, domains, clearDocuments, saveExternalPapers, externalPapers } = useDomains();
+  
+  // --- State for arXiv Feature ---
+  const [arxivPapers, setArxivPapers] = useState([]);
+  const [arxivLoading, setArxivLoading] = useState(false);
+  const [arxivError, setArxivError] = useState(null);
+  const [selectedArxivPapers, setSelectedArxivPapers] = useState(new Set());
+  // --------------------------------
   
   // Get current subdomains
   const getCurrentSubdomains = () => {
@@ -89,6 +97,98 @@ const DomainPanel = ({
       setShowAllDocuments(false);
     }
   };
+  
+  // --- Function to fetch arXiv papers ---
+  const fetchArxivPapers = useCallback(async () => {
+    if (!currentDomain && !isRootLevel) {
+      setArxivError("Cannot fetch papers without a current domain context.");
+      return;
+    }
+    // Use the most specific context available (full path if not root)
+    const context = isRootLevel ? 'General Science' : currentPath.join(' > '); 
+    console.log(`Fetching arXiv papers for context: ${context}`);
+
+    setArxivLoading(true);
+    setArxivError(null);
+    setArxivPapers([]); // Clear previous results
+    setSelectedArxivPapers(new Set()); // Clear selections
+
+    try {
+      // Construct query params
+      const params = new URLSearchParams({ context });
+      // Explicitly request more results
+      params.append('maxResults', '50'); 
+
+      // Use relative path due to proxy setup in package.json
+      const response = await axios.get(`/api/external/papers?${params.toString()}`);
+      
+      if (response.data && Array.isArray(response.data)) {
+          setArxivPapers(response.data);
+          if (response.data.length === 0) {
+              console.log("No papers found for this context.");
+              // Optionally set a specific message instead of error
+              // setArxivError("No recent papers found matching this context."); 
+          }
+      } else {
+          throw new Error("Invalid response format from server.");
+      }
+    } catch (error) {
+      console.error('Error fetching arXiv papers:', error);
+      const message = error.response?.data?.message || error.message || 'Failed to fetch papers.';
+      setArxivError(`Error: ${message}`);
+    } finally {
+      setArxivLoading(false);
+    }
+  }, [currentDomain, currentPath, isRootLevel]); // Dependencies for useCallback
+  // ---------------------------------------
+
+  // --- Function to handle arXiv paper selection ---
+  const handleArxivSelection = (paperId) => {
+    setSelectedArxivPapers(prevSelected => {
+        const newSelected = new Set(prevSelected);
+        if (newSelected.has(paperId)) {
+            newSelected.delete(paperId);
+        } else {
+            newSelected.add(paperId);
+        }
+        return newSelected;
+    });
+  };
+  // --------------------------------------------
+  
+  // --- Function to handle saving selected arXiv paper metadata ---
+  const handleSaveSelection = () => {
+    if (selectedArxivPapers.size === 0) {
+      alert('Please select at least one paper to save.');
+      return;
+    }
+
+    // Get the full paper objects for the selected IDs
+    const papersToSave = arxivPapers.filter(paper => selectedArxivPapers.has(paper.id));
+    
+    // Get the current domain path string
+    const currentPathString = currentPath.join('/');
+    
+    if (!currentPathString) {
+        alert("Error: Cannot determine the current domain path to save papers.");
+        return;
+    }
+
+    console.log(`Saving ${papersToSave.length} papers to path: ${currentPathString}`);
+    saveExternalPapers(currentPathString, papersToSave);
+
+    // Optionally clear selection after saving
+    setSelectedArxivPapers(new Set());
+    // Provide user feedback (e.g., using a temporary message state or alert)
+    alert(`${papersToSave.length} paper(s) saved to the current domain.`);
+
+  };
+  // ----------------------------------------------------------
+  
+  // --- Get saved papers for the current domain --- 
+  const currentPathString = useMemo(() => currentPath.join('/'), [currentPath]);
+  const savedPapersForCurrentDomain = useMemo(() => externalPapers[currentPathString] || [], [externalPapers, currentPathString]);
+  // -----------------------------------------------
   
   return (
     <div className="domain-panel">
@@ -234,6 +334,79 @@ const DomainPanel = ({
                   )}
                 </div>
               </div>
+              
+              {/* --- Saved External Paper Links Section --- */}
+              {savedPapersForCurrentDomain.length > 0 && (
+                <div className="panel-section saved-papers-section">
+                  <h3>Saved External Paper Links</h3>
+                  <ul className="saved-papers-list">
+                    {savedPapersForCurrentDomain.map((paper) => (
+                      <li key={paper.id} className="saved-paper-item">
+                        <a href={paper.link} target="_blank" rel="noopener noreferrer" title={`Authors: ${paper.authors.join(', ')}\nPublished: ${new Date(paper.published).toLocaleDateString()}`}>
+                          {paper.title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {/* --------------------------------------- */}
+
+              {/* External Papers Section */}
+              {!isRootLevel && currentDomain && (
+                <div className="panel-section external-papers-section">
+                  <h3>External Resources (arXiv)</h3>
+                  <button 
+                    onClick={fetchArxivPapers} 
+                    disabled={arxivLoading}
+                    className="fetch-button"
+                  >
+                    {arxivLoading ? 'Searching...' : 'Find Recent Papers'}
+                  </button>
+
+                  {arxivError && <p className="error-message">{arxivError}</p>}
+
+                  {arxivPapers.length > 0 && (
+                    <div className="arxiv-results">
+                      <h4>Found Papers:</h4>
+                      <div className="scrollable-list">
+                        <ul>
+                          {arxivPapers.map((paper) => (
+                            <li key={paper.id} className="arxiv-paper-item">
+                              <input 
+                                type="checkbox"
+                                checked={selectedArxivPapers.has(paper.id)}
+                                onChange={() => handleArxivSelection(paper.id)}
+                                className="paper-checkbox"
+                              />
+                              <div className="paper-details">
+                                <strong>{paper.title}</strong>
+                                <p className="authors">Authors: {paper.authors.join(', ')}</p>
+                                <p className="summary">{paper.summary}</p>
+                                <p className="meta">
+                                  Published: {new Date(paper.published).toLocaleDateString()} | 
+                                  <a href={paper.link} target="_blank" rel="noopener noreferrer"> View on arXiv</a>
+                                </p>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      {selectedArxivPapers.size > 0 && (
+                         <button 
+                            className="download-button" 
+                            onClick={handleSaveSelection}
+                          >
+                             Save Selected ({selectedArxivPapers.size}) Papers Info
+                         </button>
+                      )}
+                    </div>
+                  )}
+                  {!arxivLoading && !arxivError && arxivPapers.length === 0 && (
+                      <p className="info-text">Click 'Find Recent Papers' to search arXiv based on the domain context: "{currentPath.join(' > ')}".</p>
+                  )}
+                </div>
+              )}
               
               {/* Document List Section */}
               <div className="panel-section">
@@ -666,6 +839,117 @@ const DomainPanel = ({
         
         .clear-documents-button:hover {
           background: #c0392b;
+        }
+        
+        .external-papers-section {
+          margin-top: 20px;
+        }
+        
+        .fetch-button {
+          padding: 10px 20px;
+          background-color: #3498db;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          font-weight: bold;
+          cursor: pointer;
+          margin-bottom: 10px;
+        }
+        
+        .fetch-button:hover {
+          background-color: #2980b9;
+        }
+        
+        .arxiv-results {
+          margin-top: 10px;
+        }
+        
+        .arxiv-paper-item {
+          display: flex;
+          align-items: center;
+          padding: 8px;
+          border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .paper-checkbox {
+          margin-right: 10px;
+        }
+        
+        .paper-details {
+          flex: 1;
+        }
+        
+        .authors {
+          color: #7f8c8d;
+          font-size: 12px;
+        }
+        
+        .summary {
+          color: #555;
+          font-size: 12px;
+        }
+        
+        .meta {
+          color: #7f8c8d;
+          font-size: 12px;
+        }
+        
+        .download-button {
+          padding: 10px 20px;
+          background-color: #3498db;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          font-weight: bold;
+          cursor: pointer;
+          margin-top: 10px;
+        }
+        
+        .download-button:hover {
+          background-color: #2980b9;
+        }
+        
+        .saved-papers-section {
+          margin-top: 20px;
+          background-color: #f8f9fa; /* Light background */
+          padding: 15px;
+          border-radius: 4px;
+          border: 1px solid #e9ecef;
+        }
+        .saved-papers-section h3 {
+          margin-top: 0;
+          margin-bottom: 10px;
+          color: #495057;
+        }
+        .saved-papers-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+        .saved-paper-item {
+          margin-bottom: 8px;
+          padding: 5px 0;
+          border-bottom: 1px dashed #dee2e6;
+        }
+        .saved-paper-item a {
+          text-decoration: none;
+          color: #007bff;
+          font-weight: 500;
+        }
+        .saved-paper-item a:hover {
+          text-decoration: underline;
+        }
+        .scrollable-list {
+          max-height: 400px; /* Adjust as needed */
+          overflow-y: auto;
+          border: 1px solid #e0e0e0; /* Optional border */
+          padding: 5px;
+          margin-top: 10px;
+        }
+        .scrollable-list ul {
+            padding: 0;
+            margin: 0;
+            list-style: none;
         }
       `}</style>
     </div>

@@ -10,6 +10,7 @@ const initialState = {
   },
   currentPath: [],
   documents: {},
+  externalPapers: {}, // Add state for external papers metadata
   loading: false,
   error: null,
   config: {
@@ -28,6 +29,8 @@ const SET_CONFIG = 'SET_CONFIG';
 const RESET_DATA = 'RESET_DATA';
 const SET_INITIAL_DOMAINS = 'SET_INITIAL_DOMAINS';
 const CLEAR_DOCUMENTS = 'CLEAR_DOCUMENTS';
+const SAVE_EXTERNAL_PAPERS = 'SAVE_EXTERNAL_PAPERS';
+const SET_EXTERNAL_PAPERS = 'SET_EXTERNAL_PAPERS'; // Action type for loading
 
 // Reducer function
 const domainReducer = (state, action) => {
@@ -142,6 +145,36 @@ const domainReducer = (state, action) => {
         }
       };
       
+    case SET_EXTERNAL_PAPERS: // Handle loading external papers
+        return {
+            ...state,
+            externalPapers: action.payload || {}
+        };
+
+    case SAVE_EXTERNAL_PAPERS: {
+      const { path, papers } = action.payload;
+      const updatedExternalPapers = { ...state.externalPapers };
+      const existingPapers = updatedExternalPapers[path] || [];
+      
+      // Create a map of existing paper IDs for quick lookup
+      const existingIds = new Set(existingPapers.map(p => p.id));
+      
+      // Filter out papers that already exist in the state for this path
+      const newPapersToAdd = papers.filter(p => !existingIds.has(p.id));
+      
+      if (newPapersToAdd.length > 0) {
+        updatedExternalPapers[path] = [...existingPapers, ...newPapersToAdd];
+        console.log(`Saved ${newPapersToAdd.length} new external papers for path: ${path}`);
+      } else {
+        console.log(`No new external papers to save for path: ${path} (already exist).`);
+      }
+      
+      return {
+        ...state,
+        externalPapers: updatedExternalPapers
+      };
+    }
+      
     default:
       return state;
   }
@@ -161,17 +194,20 @@ export const DomainProvider = ({ children }) => {
       try {
         const savedState = await loadDomainState();
         
-        if (savedState && savedState.domains && Array.isArray(savedState.domains.items) && savedState.domains.items.length >= 3) {
+        // Simplified check: Load if any valid saved state exists
+        if (savedState) { 
           console.log('Loaded state from IndexedDB:', savedState);
           
           // Restore root domains if they exist
-          dispatch({
-            type: SET_INITIAL_DOMAINS,
-            payload: savedState.domains.items
-          });
+          if (savedState.domains && savedState.domains.items) {
+             dispatch({
+               type: SET_INITIAL_DOMAINS,
+               payload: savedState.domains.items
+             });
+          }
           
           // Restore subdomains
-          if (savedState.domains.children) {
+          if (savedState.domains && savedState.domains.children) {
             Object.keys(savedState.domains.children).forEach(path => {
               savedState.domains.children[path].forEach(subdomain => {
                 dispatch({
@@ -193,6 +229,15 @@ export const DomainProvider = ({ children }) => {
               });
             });
           }
+
+          // --- Restore external papers --- 
+          if (savedState.externalPapers) {
+              dispatch({
+                  type: SET_EXTERNAL_PAPERS,
+                  payload: savedState.externalPapers
+              });
+          }
+          // -------------------------------
           
           // Restore config
           if (savedState.config) {
@@ -202,9 +247,9 @@ export const DomainProvider = ({ children }) => {
             });
           }
         } else {
-          console.log('No valid saved state found in IndexedDB, will show splash page');
-          // Clear any invalid state
-          await clearDomainState();
+          console.log('No valid saved state found in IndexedDB, using initial state.');
+          // Optionally clear any potentially invalid state if needed
+          // await clearDomainState(); 
         }
       } catch (error) {
         console.error('Error loading from IndexedDB:', error);
@@ -212,7 +257,7 @@ export const DomainProvider = ({ children }) => {
           type: SET_ERROR,
           payload: 'Failed to load saved data. Starting with default settings.'
         });
-        // Clear any corrupted state
+        // Clear potentially corrupted state
         await clearDomainState();
       } finally {
         setIsInitialized(true);
@@ -220,7 +265,7 @@ export const DomainProvider = ({ children }) => {
     };
     
     loadData();
-  }, []);
+  }, []); // Empty dependency array ensures this runs only once on mount
   
   // Save state to IndexedDB on changes
   useEffect(() => {
@@ -228,6 +273,7 @@ export const DomainProvider = ({ children }) => {
       const stateToSave = {
         domains: state.domains,
         documents: state.documents,
+        externalPapers: state.externalPapers, // Include externalPapers in persistence
         config: state.config
       };
       
@@ -238,7 +284,7 @@ export const DomainProvider = ({ children }) => {
           }
         });
     }
-  }, [state.domains, state.documents, state.config, isInitialized]);
+  }, [state.domains, state.documents, state.externalPapers, state.config, isInitialized]); // Add externalPapers dependency
   
   // Helper functions
   const getPathString = (path = state.currentPath) => {
@@ -368,48 +414,56 @@ export const DomainProvider = ({ children }) => {
     }
   };
   
+  // --- Function to save external paper metadata ---
+  const saveExternalPapers = (path, papers) => {
+    if (!path || !papers || papers.length === 0) {
+        console.warn('saveExternalPapers called with invalid arguments');
+        return;
+    }
+    dispatch({
+        type: SAVE_EXTERNAL_PAPERS,
+        payload: { path, papers }
+    });
+  };
+  // ----------------------------------------------
+
+  const value = {
+    ...state,
+    // Expose functions through context
+    addDomain,
+    addSubdomain,
+    setPath,
+    navigateTo,
+    selectDomain,
+    addDocument,
+    setLoading,
+    setError,
+    setConfig,
+    resetData,
+    setInitialDomains,
+    clearDocuments: () => dispatch({ type: CLEAR_DOCUMENTS }),
+    saveExternalPapers, // Expose the new function
+    // Expose helpers
+    getPathString,
+    getCurrentDomain,
+    getCurrentDomains,
+    getCurrentDocuments,
+    domainExists,
+    canAddMoreLevels,
+    isInitialized // Expose initialization status
+  };
+
   return (
-    <DomainContext.Provider value={{
-      // State
-      currentPath: state.currentPath,
-      domains: state.domains,
-      documents: state.documents,
-      loading: state.loading,
-      error: state.error,
-      config: state.config,
-      isInitialized,
-      
-      // Helper functions
-      getPathString,
-      getCurrentDomain,
-      getCurrentDomains,
-      getCurrentDocuments,
-      domainExists,
-      canAddMoreLevels,
-      
-      // Actions
-      addDomain,
-      addSubdomain,
-      setPath,
-      navigateTo,
-      selectDomain,
-      addDocument,
-      setLoading,
-      setError,
-      setConfig,
-      resetData,
-      setInitialDomains,
-      clearDocuments: () => dispatch({ type: CLEAR_DOCUMENTS })
-    }}>
+    <DomainContext.Provider value={value}>
       {children}
     </DomainContext.Provider>
   );
 };
 
-// Custom hook for using the domain context
+// Custom hook to use the domain context
 export const useDomains = () => {
   const context = useContext(DomainContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useDomains must be used within a DomainProvider');
   }
   return context;
